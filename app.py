@@ -10,19 +10,14 @@ if "sel_slot" not in st.session_state:
     st.session_state.sel_slot = None
 
 # ══════════════════════════════════════════════════════════════════════
-# SVG WAREHOUSE MAP
+# SVG HELPERS
 # ══════════════════════════════════════════════════════════════════════
-
-# viewBox: 0 0 1200 760
-# Interior frame: x=235, y=198, w=775, h=455  (right edge x=1010)
-# Racks: y=258, h=182  → end y=440
-# Pasillos narrow: w=20  |  main aisles: w=32
 
 def _zone_style(slot_key, slot_map, diff_locs, delivery_locs, start_locs, today_count, selected):
     if slot_key not in slot_map:
         return "#e9ecef", "#9aabbc", "#adb5bd", "1"
-    lid  = slot_map[slot_key]["id"]
-    sel  = slot_key == selected
+    lid = slot_map[slot_key]["id"]
+    sel = slot_key == selected
     stroke, sw = ("#ff6b35", "3.5") if sel else ("#6c757d", "1.5")
     if lid in diff_locs:       return "#dc3545", "#fff",    stroke, sw
     if lid in today_count:     return "#6f42c1", "#fff",    stroke, sw
@@ -31,32 +26,30 @@ def _zone_style(slot_key, slot_map, diff_locs, delivery_locs, start_locs, today_
     return "#cfe2ff", "#003a70", stroke, sw
 
 
-def _rect(slot_key, fallback_label, x, y, w, h, slot_map,
-          diff_locs, delivery_locs, start_locs, today_count, selected,
+def _rect(slot_key, fallback_label, x, y, w, h,
+          slot_map, diff_locs, delivery_locs, start_locs, today_count, selected,
           vertical=False, font_size=11):
     bg, fg, stroke, sw = _zone_style(
         slot_key, slot_map, diff_locs, delivery_locs, start_locs, today_count, selected
     )
     label = slot_map[slot_key]["name"] if slot_key in slot_map else fallback_label
     cx, cy = x + w / 2, y + h / 2
-
     r = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="4" '
          f'fill="{bg}" stroke="{stroke}" stroke-width="{sw}"/>')
-
     if vertical:
         t = (f'<text transform="rotate(-90 {cx} {cy})" x="{cx}" y="{cy+4}" '
              f'text-anchor="middle" fill="{fg}" font-size="{font_size}" '
              f'font-weight="700" font-family="Arial,sans-serif">{label}</text>')
     else:
         lines = label.split("\n")
-        n     = len(lines)
-        ty    = cy - (n - 1) * 7
+        n = len(lines)
+        ty = cy - (n - 1) * 7
         spans = "".join(
-            f'<tspan x="{cx}" dy="{"0" if i == 0 else "14"}">{ln}</tspan>'
+            f'<tspan x="{cx}" dy="{"0" if i==0 else "14"}">{ln}</tspan>'
             for i, ln in enumerate(lines)
         )
-        t = (f'<text x="{cx}" y="{ty}" text-anchor="middle" '
-             f'fill="{fg}" font-size="{font_size}" font-weight="700" '
+        t = (f'<text x="{cx}" y="{ty}" text-anchor="middle" fill="{fg}" '
+             f'font-size="{font_size}" font-weight="700" '
              f'font-family="Arial,sans-serif" dominant-baseline="central">{spans}</text>')
     return r + t
 
@@ -75,22 +68,22 @@ def _pasillo(label, x, y, w, h, vertical=False):
     return r + t
 
 
-def _label(text, x, y, size=12, weight="700", fill="#1a2e42", anchor="middle"):
+def _lbl(text, x, y, size=11, fill="#1a2e42", anchor="middle", weight="700"):
     return (f'<text x="{x}" y="{y}" text-anchor="{anchor}" fill="{fill}" '
-            f'font-size="{size}" font-weight="{weight}" font-family="Arial,sans-serif">'
-            f'{text}</text>')
+            f'font-size="{size}" font-weight="{weight}" '
+            f'font-family="Arial,sans-serif">{text}</text>')
 
 
 def make_warehouse_svg(slot_map, diff_locs, delivery_locs, start_locs, today_count, selected=None):
     kw = dict(slot_map=slot_map, diff_locs=diff_locs, delivery_locs=delivery_locs,
               start_locs=start_locs, today_count=today_count, selected=selected)
 
+    # ── Fixed structural skeleton ──────────────────────────────────────
     p = [
         '<svg viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" '
         'style="width:100%;display:block;border-radius:8px;'
         'border:2px solid #2c3e50;background:#dde8f0;">',
 
-        # hatch pattern for pasillos
         '<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="8" height="8" '
         'patternTransform="rotate(45 0 0)"><line x1="0" y1="0" x2="0" y2="8" '
         'stroke="#b0bec5" stroke-width="2.5"/></pattern></defs>',
@@ -99,101 +92,65 @@ def make_warehouse_svg(slot_map, diff_locs, delivery_locs, start_locs, today_cou
         '<rect x="4" y="4" width="1192" height="752" rx="6" fill="#f7f9fb" '
         'stroke="#2c3e50" stroke-width="3"/>',
 
-        # ── TOP BANNER: Recepción ──────────────────────────────────────
+        # top banner
         '<rect x="235" y="4" width="775" height="24" fill="#1a2e42"/>',
-        _label("ZONA DE RECEPCIÓN — MUELLES DE CARGA", 622, 20, size=13, fill="#ffffff"),
+        _lbl("ZONA DE RECEPCIÓN — MUELLES DE CARGA", 622, 20, size=13, fill="#ffffff"),
 
         # reception background
         '<rect x="235" y="28" width="775" height="168" rx="3" fill="#fef9ee" '
         'stroke="#c8a020" stroke-width="1.5" stroke-dasharray="8,4"/>',
 
-        _rect("VERIF-CONTROL",  "Verificación\ny Control", 250,  42, 198, 148, **kw),
-        _rect("CLASIFICACION",  "Clasificación",            458,  42, 263, 148, **kw),
-        _rect("PALETS-VACIOS",  "Área de\nPalets Vacíos",  731,  42, 269, 148, **kw),
-
-        # ── LEFT SIDE: Andén de Recepción ─────────────────────────────
+        # left andén background
         '<rect x="4" y="195" width="230" height="453" rx="3" fill="#eef2f6" '
         'stroke="#adb5bd" stroke-width="1" stroke-dasharray="6,3"/>',
-        _label("ANDÉN DE RECEPCIÓN", 119, 188, size=10, fill="#495057"),
-        _rect("ANDEN-RECEP-1", "Andén\nRecepción 1",  18, 202, 210, 130, **kw),
-        _rect("ANDEN-RECEP-2", "Andén\nRecepción 2",  18, 390, 210, 130, **kw),
+        _lbl("ANDÉN DE RECEPCIÓN", 119, 188, size=10, fill="#495057"),
 
-        # ── MAIN INTERIOR FRAME ───────────────────────────────────────
+        # main interior frame
         '<rect x="235" y="196" width="775" height="457" rx="3" fill="none" '
         'stroke="#2c3e50" stroke-width="2.5"/>',
 
-        # top traffic aisle
+        # top pasillo de tráfico
         _pasillo("PASILLO DE TRÁFICO", 235, 196, 775, 36),
 
-        # storage header
-        _label("ALMACENAMIENTO PRINCIPAL  —  Estanterías 100–800", 622, 250, size=11),
+        # storage label
+        _lbl("ALMACENAMIENTO PRINCIPAL  —  Estanterías 100–800", 622, 250),
 
-        # ── RACKS (y=258 h=182) ───────────────────────────────────────
-        # LEFT GROUP
-        _rect("RACK-L1", "RACK-L1", 265, 258, 50, 182, vertical=True, **kw),
-        _pasillo("",      315, 258, 20, 182, vertical=True),
-        _rect("RACK-L2", "RACK-L2", 335, 258, 50, 182, vertical=True, **kw),
-        _pasillo("",      385, 258, 20, 182, vertical=True),
-        _rect("RACK-L3", "RACK-L3", 405, 258, 50, 182, vertical=True, **kw),
-        # main aisle L→C
-        _pasillo("Aisle 10-400", 455, 258, 33, 182, vertical=True),
-
-        # CENTER GROUP
-        _rect("RACK-C1", "RACK-C1", 488, 258, 50, 182, vertical=True, **kw),
-        _pasillo("",      538, 258, 20, 182, vertical=True),
-        _rect("RACK-C2", "RACK-C2", 558, 258, 50, 182, vertical=True, **kw),
-        _pasillo("",      608, 258, 20, 182, vertical=True),
-        _rect("RACK-C3", "RACK-C3", 628, 258, 50, 182, vertical=True, **kw),
-        # main aisle C→R
-        _pasillo("Aisle 10-80",  678, 258, 33, 182, vertical=True),
-
-        # RIGHT GROUP
-        _rect("RACK-R1", "RACK-R1", 711, 258, 50, 182, vertical=True, **kw),
-        _pasillo("",      761, 258, 20, 182, vertical=True),
-        _rect("RACK-R2", "RACK-R2", 781, 258, 50, 182, vertical=True, **kw),
-        _pasillo("",      831, 258, 20, 182, vertical=True),
-        _rect("RACK-R3", "RACK-R3", 851, 258, 50, 182, vertical=True, **kw),
-        _pasillo("",      901, 258, 20, 182, vertical=True),
-        _rect("RACK-R4", "RACK-R4", 921, 258, 50, 182, vertical=True, **kw),
-
-        # ── MIDDLE TRAFFIC AISLE ─────────────────────────────────────
+        # middle pasillo de tráfico
         _pasillo("PASILLO DE TRÁFICO", 235, 440, 775, 35),
 
-        # ── PICKING / PREPARACIÓN ────────────────────────────────────
-        _label("ÁREA DE PICKING / PREPARACIÓN", 622, 492, size=11),
-        _rect("AREA-PEDIDOS",     "Área de\nPedidos",      250, 497, 208, 120, **kw),
-        _rect("PICKING-CAJAS",    "Picking\nde Cajas",     468, 497, 272, 120, **kw),
-        _rect("AREA-EMPAQUETADO", "Área de\nEmpaquetado",  750, 497, 248, 120, **kw),
+        # picking label
+        _lbl("ÁREA DE PICKING / PREPARACIÓN", 622, 492),
 
-        # ── BOTTOM TRAFFIC AISLE ─────────────────────────────────────
+        # bottom pasillo de tráfico
         _pasillo("PASILLO DE TRÁFICO", 235, 617, 775, 35),
-
-        # ── EXPEDITION (bottom) ───────────────────────────────────────
-        _rect("MUELLES-SALIDA", "Muelles de Salida\n(9-16)",   250, 656, 208, 83, **kw),
-        _rect("CONSOLIDACION",  "Área de\nConsolidación",       468, 656, 272, 83, **kw),
-        _rect("ANDEN-EXPEDI",   "Andén de\nExpedición",         750, 656, 248, 83, **kw),
 
         # bottom banner
         '<rect x="235" y="743" width="775" height="13" fill="#1a2e42"/>',
-        _label("ZONA DE EXPEDICIÓN", 622, 753, size=11, fill="#ffffff"),
+        _lbl("ZONA DE EXPEDICIÓN", 622, 753, fill="#ffffff"),
 
-        # ── RIGHT SIDE: Administración ────────────────────────────────
+        # right admin background
         '<rect x="1012" y="4" width="184" height="752" rx="3" fill="#f0f4f0" '
         'stroke="#adb5bd" stroke-width="1" stroke-dasharray="4,3"/>',
-        _rect("ZONA-ADMIN",       "Zona\nAdministrativa\ny Oficinas", 1016,  24, 176, 148, **kw),
-        _rect("BANOS-VESTUARIOS", "Baños y\nVestuarios",              1016, 196, 176,  92, **kw),
-        _rect("ZONA-DESCANSO",    "Zona de\nDescanso",                1016, 308, 176,  92, **kw),
-        _rect("MANTENIMIENTO",    "Mantenimiento",                     1016, 426, 176,  92, **kw),
-
-        '</svg>',
     ]
+
+    # ── Dynamic zones from database ────────────────────────────────────
+    sorted_zones = sorted(slot_map.items(), key=lambda x: x[1].get("sort", 0))
+    for slot_key, data in sorted_zones:
+        p.append(_rect(
+            slot_key, data["name"],
+            data["svg_x"], data["svg_y"],
+            data["svg_w"], data["svg_h"],
+            vertical=data["svg_vertical"],
+            **kw,
+        ))
+
+    p.append("</svg>")
     return "".join(p)
 
 
 # ══════════════════════════════════════════════════════════════════════
 # APP
 # ══════════════════════════════════════════════════════════════════════
-
 st.title("📦 Gestor de Inventarios")
 
 tab_layout, tab_diff, tab_rhythm = st.tabs(
@@ -207,8 +164,11 @@ with tab_layout:
 
     locations = db.get_locations()
 
-    # Auto-populate prompt
-    no_slots = locations.empty or not locations["slot_key"].astype(str).str.strip().any()
+    # Auto-populate if no slots exist
+    no_slots = (
+        locations.empty
+        or not locations["slot_key"].astype(str).str.strip().any()
+    )
     if no_slots:
         st.info("El mapa está vacío. Carga las zonas del almacén para comenzar.")
         if st.button("🏭 Cargar zonas del almacén", type="primary"):
@@ -219,85 +179,113 @@ with tab_layout:
 
     diff_locs, delivery_locs, start_locs, today_count = db.get_location_status()
 
-    # Build slot_map inline: {slot_key: {id, name, zone}}
+    # Build slot_map with SVG position data
     slot_map = {
-        row["slot_key"]: {"id": int(row["id"]), "name": row["name"], "zone": row["zone"] or ""}
+        row["slot_key"]: {
+            "id":           int(row["id"]),
+            "name":         row["name"],
+            "zone":         row["zone"] or "",
+            "svg_x":        int(row.get("svg_x") or 0),
+            "svg_y":        int(row.get("svg_y") or 0),
+            "svg_w":        int(row.get("svg_w") or 100),
+            "svg_h":        int(row.get("svg_h") or 60),
+            "svg_vertical": bool(row.get("svg_vertical") or 0),
+            "sort":         int(row.get("row_pos") or 0),
+        }
         for _, row in locations.iterrows()
         if row.get("slot_key") and str(row["slot_key"]).strip()
     }
 
     # ── Legend ────────────────────────────────────────────────────────
-    leg1, leg2, leg3, leg4, leg5 = st.columns(5)
-    leg1.markdown("⬜ Sin actividad")
-    leg2.markdown("🟡 Iniciado")
-    leg3.markdown("🟢 Entregado")
-    leg4.markdown("🔴 Diferencias")
-    leg5.markdown("🟣 Conteo hoy")
+    l1, l2, l3, l4, l5 = st.columns(5)
+    l1.markdown("⬜ Sin actividad")
+    l2.markdown("🟡 Iniciado")
+    l3.markdown("🟢 Entregado")
+    l4.markdown("🔴 Diferencias")
+    l5.markdown("🟣 Conteo hoy")
 
     # ── SVG MAP ───────────────────────────────────────────────────────
-    svg = make_warehouse_svg(
-        slot_map, diff_locs, delivery_locs, start_locs, today_count,
-        selected=st.session_state.sel_slot,
+    st.markdown(
+        make_warehouse_svg(
+            slot_map, diff_locs, delivery_locs, start_locs, today_count,
+            selected=st.session_state.sel_slot,
+        ),
+        unsafe_allow_html=True,
     )
-    st.markdown(svg, unsafe_allow_html=True)
 
-    # ── Zone selector ─────────────────────────────────────────────────
     st.divider()
-    all_locs   = db.get_locations()
-    slot_names = {row["slot_key"]: row["name"] for _, row in all_locs.iterrows()
-                  if row.get("slot_key")}
-    non_slot   = all_locs[all_locs["slot_key"].isna() | (all_locs["slot_key"] == "")]
 
-    # Build selectbox options grouped
-    groups = {}
-    for _, row in all_locs.iterrows():
-        g = row["zone"] or "Sin grupo"
-        groups.setdefault(g, []).append(row["name"])
+    # ── EDITOR: Mover y redimensionar zonas ───────────────────────────
+    with st.expander("🖊️ Editar posición y tamaño de una zona"):
+        zones_df = locations[locations["slot_key"].astype(str).str.strip() != ""]
+        if not zones_df.empty:
+            zone_options = zones_df["name"].tolist()
+            edit_name = st.selectbox(
+                "Zona a editar", zone_options, key="edit_pos_sel"
+            )
+            ez = zones_df[zones_df["name"] == edit_name].iloc[0]
 
-    all_names = [row["name"] for _, row in all_locs.iterrows()]
-    sel_name  = st.selectbox(
-        "Selecciona una ubicación para editar",
-        ["— Selecciona —"] + all_names,
-        key="loc_selector",
-    )
+            st.caption(
+                "💡 El canvas del mapa mide **1200 × 760**. "
+                "Arrastra los sliders para reubicar la zona hasta que encaje con tu almacén real."
+            )
 
-    if sel_name != "— Selecciona —":
-        sel_row  = all_locs[all_locs["name"] == sel_name].iloc[0]
-        sel_slot = sel_row.get("slot_key", "")
-        st.session_state.sel_slot = sel_slot if sel_slot else None
+            with st.form("form_edit_svg"):
+                c1, c2 = st.columns(2)
+                new_x = c1.slider("Posición X  (izquierda ↔ derecha)",  0, 1150,
+                                   int(ez.get("svg_x") or 0), step=5)
+                new_y = c2.slider("Posición Y  (arriba ↕ abajo)",        0, 720,
+                                   int(ez.get("svg_y") or 0), step=5)
+                new_w = c1.slider("Ancho (W)",  20, 800,
+                                   int(ez.get("svg_w") or 100), step=5)
+                new_h = c2.slider("Alto (H)",   20, 500,
+                                   int(ez.get("svg_h") or 60), step=5)
+                new_v = st.checkbox(
+                    "Texto vertical (ideal para racks angostos)",
+                    value=bool(ez.get("svg_vertical") or 0),
+                )
 
-        lid = int(sel_row["id"])
-        st.markdown(
-            f"### 📍 {sel_row['name']}"
-            f"<span style='font-size:13px;color:#6c757d;margin-left:12px'>"
-            f"{sel_row['zone']}</span>",
-            unsafe_allow_html=True,
+                s1, s2 = st.columns(2)
+                if s1.form_submit_button("💾 Guardar posición", use_container_width=True):
+                    db.update_location_svg(
+                        int(ez["id"]), new_x, new_y, new_w, new_h, int(new_v)
+                    )
+                    st.success("✅ Posición guardada.")
+                    st.rerun()
+                if s2.form_submit_button("↩️ Restablecer original", use_container_width=True):
+                    db.reset_location_svg(str(ez.get("slot_key", "")))
+                    st.success("Posición restablecida al valor genérico.")
+                    st.rerun()
+
+    # ── EDITOR: Renombrar / cambiar grupo ─────────────────────────────
+    with st.expander("✏️ Renombrar zona o cambiar grupo"):
+        all_names = locations["name"].tolist()
+        sel_name  = st.selectbox(
+            "Zona a editar", ["— Selecciona —"] + all_names, key="loc_selector"
         )
+        if sel_name != "— Selecciona —":
+            sel_row = locations[locations["name"] == sel_name].iloc[0]
+            lid = int(sel_row["id"])
+            p1, p2 = st.columns(2)
+            with p1:
+                with st.form("form_edit_loc"):
+                    new_name = st.text_input("Nombre / Código", value=sel_row["name"])
+                    new_zone = st.text_input("Grupo / Zona",    value=sel_row["zone"] or "")
+                    if st.form_submit_button("💾 Guardar", use_container_width=True):
+                        ok, msg = db.update_location(lid, new_name, new_zone)
+                        if ok:
+                            st.rerun()
+                        else:
+                            st.error(msg)
+            with p2:
+                st.markdown(" ")
+                st.markdown(" ")
+                if st.button("🗑️ Eliminar ubicación", type="secondary", use_container_width=True):
+                    db.delete_location(lid)
+                    st.rerun()
 
-        e1, e2 = st.columns(2)
-        with e1:
-            with st.form("form_edit_loc"):
-                new_name = st.text_input("Nombre / Código", value=sel_row["name"])
-                new_zone = st.text_input("Grupo / Zona", value=sel_row["zone"] or "")
-                if st.form_submit_button("💾 Guardar", use_container_width=True):
-                    ok, msg = db.update_location(lid, new_name, new_zone)
-                    if ok:
-                        st.session_state.sel_slot = None
-                        st.rerun()
-                    else:
-                        st.error(msg)
-        with e2:
-            st.markdown(" ")
-            st.markdown(" ")
-            if st.button("🗑️ Eliminar ubicación", type="secondary", use_container_width=True):
-                db.delete_location(lid)
-                st.session_state.sel_slot = None
-                st.rerun()
-    else:
-        st.session_state.sel_slot = None
-
-    # Option to add a custom location (not in predefined slots)
-    with st.expander("➕ Agregar ubicación extra (no incluida en el mapa)"):
+    # ── Agregar ubicación extra ────────────────────────────────────────
+    with st.expander("➕ Agregar zona extra (no incluida en el mapa base)"):
         with st.form("form_add_extra", clear_on_submit=True):
             c1, c2 = st.columns(2)
             extra_name = c1.text_input("Nombre *", placeholder="RACK-XL")
@@ -327,10 +315,8 @@ with tab_diff:
                 c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
                 art_in   = c1.text_input("Artículo *")
                 loc_in   = c2.selectbox("Ubicación *", locations["name"].tolist())
-                diff_in  = c3.number_input(
-                    "Diferencia", value=0.0, step=1.0,
-                    help="Negativo = faltante · Positivo = sobrante",
-                )
+                diff_in  = c3.number_input("Diferencia", value=0.0, step=1.0,
+                                           help="Negativo=faltante · Positivo=sobrante")
                 price_in = c4.number_input("Precio ($)", min_value=0.0, value=0.0, step=0.01)
                 st.caption(f"Fecha automática: **{date.today().strftime('%d/%m/%Y')}**")
                 if st.form_submit_button("Registrar", use_container_width=True):
@@ -351,37 +337,27 @@ with tab_diff:
             m2.metric("Faltantes",        int((df["difference"] < 0).sum()))
             m3.metric("Sobrantes",        int((df["difference"] > 0).sum()))
             m4.metric("Impacto neto ($)", f"${df['impact'].sum():,.2f}")
-
             st.divider()
+
             f1, f2 = st.columns([3, 1])
             locs_filter = f1.multiselect("Filtrar ubicación", df["location"].unique().tolist())
             tipo_filter = f2.radio("Tipo", ["Todos", "Faltantes", "Sobrantes"], horizontal=True)
 
             filt = df.copy()
-            if locs_filter:
-                filt = filt[filt["location"].isin(locs_filter)]
-            if tipo_filter == "Faltantes":
-                filt = filt[filt["difference"] < 0]
-            elif tipo_filter == "Sobrantes":
-                filt = filt[filt["difference"] > 0]
+            if locs_filter: filt = filt[filt["location"].isin(locs_filter)]
+            if tipo_filter == "Faltantes": filt = filt[filt["difference"] < 0]
+            elif tipo_filter == "Sobrantes": filt = filt[filt["difference"] > 0]
 
-            display = filt[
-                ["id", "article", "location", "zone", "difference", "price", "impact", "created_date"]
-            ].copy()
-            display.columns = [
-                "ID", "Artículo", "Ubicación", "Zona",
-                "Diferencia", "Precio ($)", "Impacto ($)", "Fecha",
-            ]
+            display = filt[["id","article","location","zone","difference","price","impact","created_date"]].copy()
+            display.columns = ["ID","Artículo","Ubicación","Zona","Diferencia","Precio ($)","Impacto ($)","Fecha"]
             display["Fecha"] = pd.to_datetime(display["Fecha"]).dt.strftime("%d/%m/%Y")
 
             def _cn(v):
                 if not isinstance(v, (int, float)): return ""
                 return "color:#dc3545;font-weight:700" if v < 0 else ("color:#198754;font-weight:700" if v > 0 else "")
 
-            st.dataframe(
-                display.style.map(_cn, subset=["Diferencia", "Impacto ($)"]),
-                use_container_width=True, hide_index=True,
-            )
+            st.dataframe(display.style.map(_cn, subset=["Diferencia","Impacto ($)"]),
+                         use_container_width=True, hide_index=True)
 
             with st.expander("🗑️ Eliminar registro"):
                 if not filt.empty:
@@ -406,10 +382,8 @@ with tab_rhythm:
 
         def _pd(val):
             if val and pd.notna(val) and str(val).strip():
-                try:
-                    return datetime.strptime(str(val)[:10], "%Y-%m-%d").date()
-                except ValueError:
-                    pass
+                try: return datetime.strptime(str(val)[:10], "%Y-%m-%d").date()
+                except ValueError: pass
             return None
 
         with st.expander("✏️ Editar ritmo de una ubicación"):
@@ -423,14 +397,11 @@ with tab_rhythm:
                     has_s    = c2.checkbox("¿Tiene fecha de inicio?",   value=bool(_pd(row["start_date"])))
                     has_d    = c3.checkbox("¿Tiene fecha de entrega?",  value=bool(_pd(row["delivery_date"])))
                     si = di  = None
-                    if has_s: si = c2.date_input("Inicio",   value=_pd(row["start_date"])    or today, key="si")
-                    if has_d: di = c3.date_input("Entrega",  value=_pd(row["delivery_date"]) or today, key="di")
+                    if has_s: si = c2.date_input("Inicio",  value=_pd(row["start_date"])    or today, key="si")
+                    if has_d: di = c3.date_input("Entrega", value=_pd(row["delivery_date"]) or today, key="di")
                     if st.form_submit_button("Guardar", use_container_width=True):
-                        db.update_rhythm(
-                            int(row["location_id"]), freq_in,
-                            si if has_s else None,
-                            di if has_d else None,
-                        )
+                        db.update_rhythm(int(row["location_id"]), freq_in,
+                                         si if has_s else None, di if has_d else None)
                         st.success("Actualizado.")
                         st.rerun()
 
@@ -461,8 +432,8 @@ with tab_rhythm:
         m2.metric("Conteo hoy 🟣", int((rdf["_st"] == "today").sum()))
         m3.metric("Vencidos 🔴",   int((rdf["_st"] == "overdue").sum()))
 
-        show = ["Ubicación", "Zona", "Frecuencia (días)", "Inicio", "Entrega",
-                "Días transcurridos", "Siguiente conteo"]
+        show = ["Ubicación","Zona","Frecuencia (días)","Inicio","Entrega",
+                "Días transcurridos","Siguiente conteo"]
 
         def _sr(row):
             n = len(row)
@@ -470,6 +441,8 @@ with tab_rhythm:
             if row["_st"] == "today":   return ["background:#ede7f6;color:#311b92"] * n
             return [""] * n
 
-        styled = (rdf[show + ["_st"]].style.apply(_sr, axis=1).hide(subset=["_st"], axis=1))
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.dataframe(
+            rdf[show + ["_st"]].style.apply(_sr, axis=1).hide(subset=["_st"], axis=1),
+            use_container_width=True, hide_index=True,
+        )
         st.caption("🟣 Conteo programado para hoy  |  🔴 Vencido")
