@@ -3,64 +3,196 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import database as db
 
-st.set_page_config(
-    page_title="Gestor de Inventarios",
-    layout="wide",
-    page_icon="📦",
-)
-
+st.set_page_config(page_title="Gestor de Inventarios", layout="wide", page_icon="📦")
 db.init_db()
 
-# ── Session state defaults ─────────────────────────────────────────────
-for key, val in [("grid_rows", 6), ("grid_cols", 10), ("sel_cell", None)]:
-    if key not in st.session_state:
-        st.session_state[key] = val
+if "sel_slot" not in st.session_state:
+    st.session_state.sel_slot = None
 
-# ── Global CSS ─────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-/* Make all map buttons the same height */
-div[data-testid="stButton"] > button {
-    height: 58px !important;
-    font-size: 11px !important;
-    font-weight: 600 !important;
-    padding: 2px 4px !important;
-    line-height: 1.2 !important;
-    white-space: normal !important;
-    word-break: break-word !important;
-    transition: filter 0.15s ease;
-}
-div[data-testid="stButton"] > button:hover { filter: brightness(0.9); }
+# ══════════════════════════════════════════════════════════════════════
+# SVG WAREHOUSE MAP
+# ══════════════════════════════════════════════════════════════════════
 
-/* Empty cell style */
-.empty-cell + div[data-testid="stButton"] > button {
-    background: transparent !important;
-    color: #adb5bd !important;
-    border: 1px dashed #ced4da !important;
-    font-weight: 400 !important;
-    font-size: 18px !important;
-}
-/* Status colors via :has() – works in all modern browsers */
-[data-testid="stVerticalBlock"]:has(.c-default) [data-testid="stButton"] > button
-    { background:#dee2e6 !important; color:#343a40 !important; border:1px solid #adb5bd !important; }
-[data-testid="stVerticalBlock"]:has(.c-yellow) [data-testid="stButton"] > button
-    { background:#ffc107 !important; color:#212529 !important; border:1px solid #e5ac00 !important; }
-[data-testid="stVerticalBlock"]:has(.c-green) [data-testid="stButton"] > button
-    { background:#198754 !important; color:#fff !important; border:1px solid #146c43 !important; }
-[data-testid="stVerticalBlock"]:has(.c-red) [data-testid="stButton"] > button
-    { background:#dc3545 !important; color:#fff !important; border:1px solid #b02a37 !important; }
-[data-testid="stVerticalBlock"]:has(.c-purple) [data-testid="stButton"] > button
-    { background:#6f42c1 !important; color:#fff !important; border:1px solid #59359a !important; }
+# viewBox: 0 0 1200 760
+# Interior frame: x=235, y=198, w=775, h=455  (right edge x=1010)
+# Racks: y=258, h=182  → end y=440
+# Pasillos narrow: w=20  |  main aisles: w=32
 
-/* Row number column */
-div[data-testid="stColumn"]:first-child div[data-testid="stMarkdownContainer"] p {
-    line-height: 58px !important;
-    font-weight: 700;
-    color: #6c757d;
-    text-align: center;
-}
-</style>
-""", unsafe_allow_html=True)
+def _zone_style(slot_key, slot_map, diff_locs, delivery_locs, start_locs, today_count, selected):
+    if slot_key not in slot_map:
+        return "#e9ecef", "#9aabbc", "#adb5bd", "1"
+    lid  = slot_map[slot_key]["id"]
+    sel  = slot_key == selected
+    stroke, sw = ("#ff6b35", "3.5") if sel else ("#6c757d", "1.5")
+    if lid in diff_locs:       return "#dc3545", "#fff",    stroke, sw
+    if lid in today_count:     return "#6f42c1", "#fff",    stroke, sw
+    if lid in delivery_locs:   return "#198754", "#fff",    stroke, sw
+    if lid in start_locs:      return "#ffc107", "#1a1a1a", stroke, sw
+    return "#cfe2ff", "#003a70", stroke, sw
+
+
+def _rect(slot_key, fallback_label, x, y, w, h, slot_map,
+          diff_locs, delivery_locs, start_locs, today_count, selected,
+          vertical=False, font_size=11):
+    bg, fg, stroke, sw = _zone_style(
+        slot_key, slot_map, diff_locs, delivery_locs, start_locs, today_count, selected
+    )
+    label = slot_map[slot_key]["name"] if slot_key in slot_map else fallback_label
+    cx, cy = x + w / 2, y + h / 2
+
+    r = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="4" '
+         f'fill="{bg}" stroke="{stroke}" stroke-width="{sw}"/>')
+
+    if vertical:
+        t = (f'<text transform="rotate(-90 {cx} {cy})" x="{cx}" y="{cy+4}" '
+             f'text-anchor="middle" fill="{fg}" font-size="{font_size}" '
+             f'font-weight="700" font-family="Arial,sans-serif">{label}</text>')
+    else:
+        lines = label.split("\n")
+        n     = len(lines)
+        ty    = cy - (n - 1) * 7
+        spans = "".join(
+            f'<tspan x="{cx}" dy="{"0" if i == 0 else "14"}">{ln}</tspan>'
+            for i, ln in enumerate(lines)
+        )
+        t = (f'<text x="{cx}" y="{ty}" text-anchor="middle" '
+             f'fill="{fg}" font-size="{font_size}" font-weight="700" '
+             f'font-family="Arial,sans-serif" dominant-baseline="central">{spans}</text>')
+    return r + t
+
+
+def _pasillo(label, x, y, w, h, vertical=False):
+    cx, cy = x + w / 2, y + h / 2
+    r = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="0" '
+         f'fill="url(#hatch)" stroke="#bfc8d0" stroke-width="1"/>')
+    if vertical:
+        t = (f'<text transform="rotate(-90 {cx} {cy})" x="{cx}" y="{cy+4}" '
+             f'text-anchor="middle" fill="#6c757d" font-size="8" '
+             f'font-family="Arial,sans-serif">{label}</text>')
+    else:
+        t = (f'<text x="{cx}" y="{cy+4}" text-anchor="middle" fill="#6c757d" '
+             f'font-size="9" font-weight="700" font-family="Arial,sans-serif">{label}</text>')
+    return r + t
+
+
+def _label(text, x, y, size=12, weight="700", fill="#1a2e42", anchor="middle"):
+    return (f'<text x="{x}" y="{y}" text-anchor="{anchor}" fill="{fill}" '
+            f'font-size="{size}" font-weight="{weight}" font-family="Arial,sans-serif">'
+            f'{text}</text>')
+
+
+def make_warehouse_svg(slot_map, diff_locs, delivery_locs, start_locs, today_count, selected=None):
+    kw = dict(slot_map=slot_map, diff_locs=diff_locs, delivery_locs=delivery_locs,
+              start_locs=start_locs, today_count=today_count, selected=selected)
+
+    p = [
+        '<svg viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" '
+        'style="width:100%;display:block;border-radius:8px;'
+        'border:2px solid #2c3e50;background:#dde8f0;">',
+
+        # hatch pattern for pasillos
+        '<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="8" height="8" '
+        'patternTransform="rotate(45 0 0)"><line x1="0" y1="0" x2="0" y2="8" '
+        'stroke="#b0bec5" stroke-width="2.5"/></pattern></defs>',
+
+        # outer building
+        '<rect x="4" y="4" width="1192" height="752" rx="6" fill="#f7f9fb" '
+        'stroke="#2c3e50" stroke-width="3"/>',
+
+        # ── TOP BANNER: Recepción ──────────────────────────────────────
+        '<rect x="235" y="4" width="775" height="24" fill="#1a2e42"/>',
+        _label("ZONA DE RECEPCIÓN — MUELLES DE CARGA", 622, 20, size=13, fill="#ffffff"),
+
+        # reception background
+        '<rect x="235" y="28" width="775" height="168" rx="3" fill="#fef9ee" '
+        'stroke="#c8a020" stroke-width="1.5" stroke-dasharray="8,4"/>',
+
+        _rect("VERIF-CONTROL",  "Verificación\ny Control", 250,  42, 198, 148, **kw),
+        _rect("CLASIFICACION",  "Clasificación",            458,  42, 263, 148, **kw),
+        _rect("PALETS-VACIOS",  "Área de\nPalets Vacíos",  731,  42, 269, 148, **kw),
+
+        # ── LEFT SIDE: Andén de Recepción ─────────────────────────────
+        '<rect x="4" y="195" width="230" height="453" rx="3" fill="#eef2f6" '
+        'stroke="#adb5bd" stroke-width="1" stroke-dasharray="6,3"/>',
+        _label("ANDÉN DE RECEPCIÓN", 119, 188, size=10, fill="#495057"),
+        _rect("ANDEN-RECEP-1", "Andén\nRecepción 1",  18, 202, 210, 130, **kw),
+        _rect("ANDEN-RECEP-2", "Andén\nRecepción 2",  18, 390, 210, 130, **kw),
+
+        # ── MAIN INTERIOR FRAME ───────────────────────────────────────
+        '<rect x="235" y="196" width="775" height="457" rx="3" fill="none" '
+        'stroke="#2c3e50" stroke-width="2.5"/>',
+
+        # top traffic aisle
+        _pasillo("PASILLO DE TRÁFICO", 235, 196, 775, 36),
+
+        # storage header
+        _label("ALMACENAMIENTO PRINCIPAL  —  Estanterías 100–800", 622, 250, size=11),
+
+        # ── RACKS (y=258 h=182) ───────────────────────────────────────
+        # LEFT GROUP
+        _rect("RACK-L1", "RACK-L1", 265, 258, 50, 182, vertical=True, **kw),
+        _pasillo("",      315, 258, 20, 182, vertical=True),
+        _rect("RACK-L2", "RACK-L2", 335, 258, 50, 182, vertical=True, **kw),
+        _pasillo("",      385, 258, 20, 182, vertical=True),
+        _rect("RACK-L3", "RACK-L3", 405, 258, 50, 182, vertical=True, **kw),
+        # main aisle L→C
+        _pasillo("Aisle 10-400", 455, 258, 33, 182, vertical=True),
+
+        # CENTER GROUP
+        _rect("RACK-C1", "RACK-C1", 488, 258, 50, 182, vertical=True, **kw),
+        _pasillo("",      538, 258, 20, 182, vertical=True),
+        _rect("RACK-C2", "RACK-C2", 558, 258, 50, 182, vertical=True, **kw),
+        _pasillo("",      608, 258, 20, 182, vertical=True),
+        _rect("RACK-C3", "RACK-C3", 628, 258, 50, 182, vertical=True, **kw),
+        # main aisle C→R
+        _pasillo("Aisle 10-80",  678, 258, 33, 182, vertical=True),
+
+        # RIGHT GROUP
+        _rect("RACK-R1", "RACK-R1", 711, 258, 50, 182, vertical=True, **kw),
+        _pasillo("",      761, 258, 20, 182, vertical=True),
+        _rect("RACK-R2", "RACK-R2", 781, 258, 50, 182, vertical=True, **kw),
+        _pasillo("",      831, 258, 20, 182, vertical=True),
+        _rect("RACK-R3", "RACK-R3", 851, 258, 50, 182, vertical=True, **kw),
+        _pasillo("",      901, 258, 20, 182, vertical=True),
+        _rect("RACK-R4", "RACK-R4", 921, 258, 50, 182, vertical=True, **kw),
+
+        # ── MIDDLE TRAFFIC AISLE ─────────────────────────────────────
+        _pasillo("PASILLO DE TRÁFICO", 235, 440, 775, 35),
+
+        # ── PICKING / PREPARACIÓN ────────────────────────────────────
+        _label("ÁREA DE PICKING / PREPARACIÓN", 622, 492, size=11),
+        _rect("AREA-PEDIDOS",     "Área de\nPedidos",      250, 497, 208, 120, **kw),
+        _rect("PICKING-CAJAS",    "Picking\nde Cajas",     468, 497, 272, 120, **kw),
+        _rect("AREA-EMPAQUETADO", "Área de\nEmpaquetado",  750, 497, 248, 120, **kw),
+
+        # ── BOTTOM TRAFFIC AISLE ─────────────────────────────────────
+        _pasillo("PASILLO DE TRÁFICO", 235, 617, 775, 35),
+
+        # ── EXPEDITION (bottom) ───────────────────────────────────────
+        _rect("MUELLES-SALIDA", "Muelles de Salida\n(9-16)",   250, 656, 208, 83, **kw),
+        _rect("CONSOLIDACION",  "Área de\nConsolidación",       468, 656, 272, 83, **kw),
+        _rect("ANDEN-EXPEDI",   "Andén de\nExpedición",         750, 656, 248, 83, **kw),
+
+        # bottom banner
+        '<rect x="235" y="743" width="775" height="13" fill="#1a2e42"/>',
+        _label("ZONA DE EXPEDICIÓN", 622, 753, size=11, fill="#ffffff"),
+
+        # ── RIGHT SIDE: Administración ────────────────────────────────
+        '<rect x="1012" y="4" width="184" height="752" rx="3" fill="#f0f4f0" '
+        'stroke="#adb5bd" stroke-width="1" stroke-dasharray="4,3"/>',
+        _rect("ZONA-ADMIN",       "Zona\nAdministrativa\ny Oficinas", 1016,  24, 176, 148, **kw),
+        _rect("BANOS-VESTUARIOS", "Baños y\nVestuarios",              1016, 196, 176,  92, **kw),
+        _rect("ZONA-DESCANSO",    "Zona de\nDescanso",                1016, 308, 176,  92, **kw),
+        _rect("MANTENIMIENTO",    "Mantenimiento",                     1016, 426, 176,  92, **kw),
+
+        '</svg>',
+    ]
+    return "".join(p)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# APP
+# ══════════════════════════════════════════════════════════════════════
 
 st.title("📦 Gestor de Inventarios")
 
@@ -68,156 +200,120 @@ tab_layout, tab_diff, tab_rhythm = st.tabs(
     ["🗺️ Layout", "📋 Diferencias", "🔄 Ritmo de Inventarios"]
 )
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# TAB 1 · LAYOUT  (mapa visual interactivo)
-# ═══════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────
+# TAB 1 · LAYOUT
+# ─────────────────────────────────────────────────────────────────────
 with tab_layout:
 
-    # ── Grid size controls ────────────────────────────────────────────
-    cfg1, cfg2, cfg3 = st.columns([1, 1, 4])
-    ROWS = cfg1.number_input("Filas", 1, 25, st.session_state.grid_rows, key="nrows")
-    COLS = cfg2.number_input("Columnas", 1, 30, st.session_state.grid_cols, key="ncols")
-    st.session_state.grid_rows = int(ROWS)
-    st.session_state.grid_cols = int(COLS)
+    locations = db.get_locations()
 
-    cfg3.markdown(
-        "🟡 Inventario iniciado &nbsp;&nbsp;"
-        "🟢 Entregado &nbsp;&nbsp;"
-        "🔴 Diferencias registradas &nbsp;&nbsp;"
-        "🟣 Conteo programado hoy"
+    # Auto-populate prompt
+    if locations.empty:
+        st.info("El mapa está vacío. Carga las zonas del almacén para comenzar.")
+        if st.button("🏭 Cargar zonas del almacén", type="primary"):
+            added = db.batch_add_warehouse_zones()
+            st.success(f"Se cargaron {added} zonas.")
+            st.rerun()
+        st.stop()
+
+    diff_locs, delivery_locs, start_locs, today_count = db.get_location_status()
+    slot_map = db.get_slot_map()
+
+    # ── Legend ────────────────────────────────────────────────────────
+    leg1, leg2, leg3, leg4, leg5 = st.columns(5)
+    leg1.markdown("⬜ Sin actividad")
+    leg2.markdown("🟡 Iniciado")
+    leg3.markdown("🟢 Entregado")
+    leg4.markdown("🔴 Diferencias")
+    leg5.markdown("🟣 Conteo hoy")
+
+    # ── SVG MAP ───────────────────────────────────────────────────────
+    svg = make_warehouse_svg(
+        slot_map, diff_locs, delivery_locs, start_locs, today_count,
+        selected=st.session_state.sel_slot,
+    )
+    st.markdown(svg, unsafe_allow_html=True)
+
+    # ── Zone selector ─────────────────────────────────────────────────
+    st.divider()
+    all_locs   = db.get_locations()
+    slot_names = {row["slot_key"]: row["name"] for _, row in all_locs.iterrows()
+                  if row.get("slot_key")}
+    non_slot   = all_locs[all_locs["slot_key"].isna() | (all_locs["slot_key"] == "")]
+
+    # Build selectbox options grouped
+    groups = {}
+    for _, row in all_locs.iterrows():
+        g = row["zone"] or "Sin grupo"
+        groups.setdefault(g, []).append(row["name"])
+
+    all_names = [row["name"] for _, row in all_locs.iterrows()]
+    sel_name  = st.selectbox(
+        "Selecciona una ubicación para editar",
+        ["— Selecciona —"] + all_names,
+        key="loc_selector",
     )
 
-    # ── Data ──────────────────────────────────────────────────────────
-    locations = db.get_locations()
-    diff_locs, delivery_locs, start_locs, today_count = db.get_location_status()
+    if sel_name != "— Selecciona —":
+        sel_row  = all_locs[all_locs["name"] == sel_name].iloc[0]
+        sel_slot = sel_row.get("slot_key", "")
+        st.session_state.sel_slot = sel_slot if sel_slot else None
 
-    loc_by_pos: dict = {}
-    if not locations.empty:
-        for _, loc in locations.iterrows():
-            r, c = int(loc["row_pos"]), int(loc["col_pos"])
-            if 0 <= r < ROWS and 0 <= c < COLS:
-                loc_by_pos[(r, c)] = loc
-
-    def _css_class(loc_id: int) -> str:
-        if loc_id in diff_locs:       return "c-red"
-        if loc_id in today_count:     return "c-purple"
-        if loc_id in delivery_locs:   return "c-green"
-        if loc_id in start_locs:      return "c-yellow"
-        return "c-default"
-
-    # ── Column header row ─────────────────────────────────────────────
-    header = st.columns([0.35] + [1] * COLS)
-    header[0].markdown(" ")
-    for c in range(COLS):
-        header[c + 1].markdown(
-            f"<p style='text-align:center;color:#6c757d;font-size:11px;"
-            f"font-weight:700;margin:0'>{c + 1}</p>",
+        lid = int(sel_row["id"])
+        st.markdown(
+            f"### 📍 {sel_row['name']}"
+            f"<span style='font-size:13px;color:#6c757d;margin-left:12px'>"
+            f"{sel_row['zone']}</span>",
             unsafe_allow_html=True,
         )
 
-    # ── Grid rows ─────────────────────────────────────────────────────
-    for r in range(ROWS):
-        row_cols = st.columns([0.35] + [1] * COLS)
-        row_cols[0].markdown(str(r + 1))          # row number
-
-        for c in range(COLS):
-            with row_cols[c + 1]:
-                pos = (r, c)
-
-                if pos in loc_by_pos:
-                    loc = loc_by_pos[pos]
-                    css = _css_class(int(loc["id"]))
-                    # Hidden marker for CSS :has() targeting
-                    st.markdown(
-                        f'<span class="{css}" style="display:none"></span>',
-                        unsafe_allow_html=True,
-                    )
-                    label = loc["name"]
-                else:
-                    st.markdown(
-                        '<span class="empty-cell" style="display:none"></span>',
-                        unsafe_allow_html=True,
-                    )
-                    label = "+"
-
-                if st.button(label, key=f"map_{r}_{c}", use_container_width=True):
-                    st.session_state.sel_cell = (r, c)
-                    st.rerun()
-
-    # ── Selection / edit panel ────────────────────────────────────────
-    if st.session_state.sel_cell is not None:
-        sel_r, sel_c = st.session_state.sel_cell
-        sel_pos = (sel_r, sel_c)
-
-        st.divider()
-
-        if sel_pos in loc_by_pos:
-            loc = loc_by_pos[sel_pos]
-            lid = int(loc["id"])
-            st.markdown(
-                f"### 📍 {loc['name']}  "
-                f"<span style='font-size:14px;color:#6c757d'>Fila {sel_r+1} · Columna {sel_c+1}</span>",
-                unsafe_allow_html=True,
-            )
-
-            p1, p2 = st.columns(2)
-            with p1:
-                with st.form("form_edit_loc"):
-                    new_name = st.text_input("Nombre", value=loc["name"])
-                    new_zone = st.text_input("Zona", value=loc["zone"] or "")
-                    if st.form_submit_button("💾 Guardar cambios", use_container_width=True):
-                        ok, msg = db.update_location(lid, new_name, new_zone)
-                        if ok:
-                            st.session_state.sel_cell = None
-                            st.rerun()
-                        else:
-                            st.error(msg)
-            with p2:
-                st.markdown(" ")
-                st.markdown(" ")
-                if st.button("🗑️ Eliminar ubicación", type="secondary", use_container_width=True):
-                    db.delete_location(lid)
-                    st.session_state.sel_cell = None
-                    st.rerun()
-                if st.button("✖ Cerrar panel", use_container_width=True):
-                    st.session_state.sel_cell = None
-                    st.rerun()
-        else:
-            st.markdown(
-                f"### ➕ Nueva ubicación  "
-                f"<span style='font-size:14px;color:#6c757d'>Fila {sel_r+1} · Columna {sel_c+1}</span>",
-                unsafe_allow_html=True,
-            )
-            with st.form("form_add_loc", clear_on_submit=True):
-                c1, c2 = st.columns(2)
-                name_in = c1.text_input("Nombre *", placeholder="RACK-A1")
-                zone_in = c2.text_input("Zona", placeholder="Almacén Norte")
-                sub, cancel = st.columns(2)
-                if sub.form_submit_button("Agregar", use_container_width=True):
-                    if name_in.strip():
-                        ok, msg = db.add_location(name_in, zone_in, sel_r, sel_c)
-                        if ok:
-                            st.session_state.sel_cell = None
-                            st.rerun()
-                        else:
-                            st.error(msg)
+        e1, e2 = st.columns(2)
+        with e1:
+            with st.form("form_edit_loc"):
+                new_name = st.text_input("Nombre / Código", value=sel_row["name"])
+                new_zone = st.text_input("Grupo / Zona", value=sel_row["zone"] or "")
+                if st.form_submit_button("💾 Guardar", use_container_width=True):
+                    ok, msg = db.update_location(lid, new_name, new_zone)
+                    if ok:
+                        st.session_state.sel_slot = None
+                        st.rerun()
                     else:
-                        st.warning("El nombre es obligatorio.")
-            if st.button("✖ Cancelar", use_container_width=True):
-                st.session_state.sel_cell = None
+                        st.error(msg)
+        with e2:
+            st.markdown(" ")
+            st.markdown(" ")
+            if st.button("🗑️ Eliminar ubicación", type="secondary", use_container_width=True):
+                db.delete_location(lid)
+                st.session_state.sel_slot = None
                 st.rerun()
+    else:
+        st.session_state.sel_slot = None
+
+    # Option to add a custom location (not in predefined slots)
+    with st.expander("➕ Agregar ubicación extra (no incluida en el mapa)"):
+        with st.form("form_add_extra", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            extra_name = c1.text_input("Nombre *", placeholder="RACK-XL")
+            extra_zone = c2.text_input("Zona / Grupo", placeholder="Almacenamiento")
+            if st.form_submit_button("Agregar"):
+                if extra_name.strip():
+                    ok, msg = db.add_location(extra_name, extra_zone, 99, 0)
+                    if ok:
+                        st.success(f"✅ {extra_name.upper()} agregado.")
+                        st.rerun()
+                    else:
+                        st.error(msg)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────
 # TAB 2 · DIFERENCIAS
-# ═══════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────
 with tab_diff:
     st.subheader("Registro de Diferencias")
-
     locations = db.get_locations()
+
     if locations.empty:
-        st.warning("Primero define ubicaciones en la pestaña **Layout**.")
+        st.warning("Primero carga las zonas en la pestaña **Layout**.")
     else:
         with st.expander("➕ Registrar diferencia"):
             with st.form("form_add_diff", clear_on_submit=True):
@@ -250,7 +346,6 @@ with tab_diff:
             m4.metric("Impacto neto ($)", f"${df['impact'].sum():,.2f}")
 
             st.divider()
-
             f1, f2 = st.columns([3, 1])
             locs_filter = f1.multiselect("Filtrar ubicación", df["location"].unique().tolist())
             tipo_filter = f2.radio("Tipo", ["Todos", "Faltantes", "Sobrantes"], horizontal=True)
@@ -272,19 +367,13 @@ with tab_diff:
             ]
             display["Fecha"] = pd.to_datetime(display["Fecha"]).dt.strftime("%d/%m/%Y")
 
-            def _color_num(val):
-                if not isinstance(val, (int, float)):
-                    return ""
-                if val < 0:
-                    return "color:#dc3545; font-weight:700"
-                if val > 0:
-                    return "color:#198754; font-weight:700"
-                return ""
+            def _cn(v):
+                if not isinstance(v, (int, float)): return ""
+                return "color:#dc3545;font-weight:700" if v < 0 else ("color:#198754;font-weight:700" if v > 0 else "")
 
             st.dataframe(
-                display.style.map(_color_num, subset=["Diferencia", "Impacto ($)"]),
-                use_container_width=True,
-                hide_index=True,
+                display.style.map(_cn, subset=["Diferencia", "Impacto ($)"]),
+                use_container_width=True, hide_index=True,
             )
 
             with st.expander("🗑️ Eliminar registro"):
@@ -295,20 +384,20 @@ with tab_diff:
                         st.rerun()
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# TAB 3 · RITMO DE INVENTARIOS
-# ═══════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────
+# TAB 3 · RITMO
+# ─────────────────────────────────────────────────────────────────────
 with tab_rhythm:
     st.subheader("Ritmo de Inventarios")
-
     locations = db.get_locations()
+
     if locations.empty:
-        st.warning("Primero define ubicaciones en la pestaña **Layout**.")
+        st.warning("Primero carga las zonas en la pestaña **Layout**.")
     else:
         rhythm = db.get_rhythm()
         today  = date.today()
 
-        def _parse_date(val):
+        def _pd(val):
             if val and pd.notna(val) and str(val).strip():
                 try:
                     return datetime.strptime(str(val)[:10], "%Y-%m-%d").date()
@@ -318,54 +407,36 @@ with tab_rhythm:
 
         with st.expander("✏️ Editar ritmo de una ubicación"):
             if not rhythm.empty:
-                sel = st.selectbox("Ubicación", rhythm["location"].tolist(), key="rhythm_sel")
+                sel = st.selectbox("Ubicación", rhythm["location"].tolist(), key="rsel")
                 row = rhythm[rhythm["location"] == sel].iloc[0]
-
-                with st.form("form_edit_rhythm"):
+                with st.form("form_rhythm"):
                     c1, c2, c3 = st.columns(3)
-                    freq_val = int(row["frequency_days"]) if pd.notna(row["frequency_days"]) else 30
-                    freq_in  = c1.number_input("Frecuencia (días)", 1, 365, freq_val)
-
-                    has_start = c2.checkbox(
-                        "¿Tiene fecha de inicio?", value=bool(_parse_date(row["start_date"]))
-                    )
-                    has_deliv = c3.checkbox(
-                        "¿Tiene fecha de entrega?", value=bool(_parse_date(row["delivery_date"]))
-                    )
-                    start_in = deliv_in = None
-                    if has_start:
-                        start_in = c2.date_input(
-                            "Fecha inicio",
-                            value=_parse_date(row["start_date"]) or today,
-                            key="s_date",
-                        )
-                    if has_deliv:
-                        deliv_in = c3.date_input(
-                            "Fecha entrega",
-                            value=_parse_date(row["delivery_date"]) or today,
-                            key="d_date",
-                        )
+                    fv       = int(row["frequency_days"]) if pd.notna(row["frequency_days"]) else 30
+                    freq_in  = c1.number_input("Frecuencia (días)", 1, 365, fv)
+                    has_s    = c2.checkbox("¿Tiene fecha de inicio?",   value=bool(_pd(row["start_date"])))
+                    has_d    = c3.checkbox("¿Tiene fecha de entrega?",  value=bool(_pd(row["delivery_date"])))
+                    si = di  = None
+                    if has_s: si = c2.date_input("Inicio",   value=_pd(row["start_date"])    or today, key="si")
+                    if has_d: di = c3.date_input("Entrega",  value=_pd(row["delivery_date"]) or today, key="di")
                     if st.form_submit_button("Guardar", use_container_width=True):
                         db.update_rhythm(
-                            int(row["location_id"]),
-                            freq_in,
-                            start_in if has_start else None,
-                            deliv_in if has_deliv else None,
+                            int(row["location_id"]), freq_in,
+                            si if has_s else None,
+                            di if has_d else None,
                         )
                         st.success("Actualizado.")
                         st.rerun()
 
         st.divider()
-
         rhythm = db.get_rhythm()
         rows_out = []
         for _, r in rhythm.iterrows():
-            last   = _parse_date(r["delivery_date"])
-            freq   = int(r["frequency_days"]) if pd.notna(r["frequency_days"]) else None
-            nxt    = (last + timedelta(days=freq)) if last and freq else None
-            days   = (today - last).days if last else None
-            ov     = bool(nxt and nxt < today)
-            dt     = bool(nxt and nxt == today)
+            last  = _pd(r["delivery_date"])
+            freq  = int(r["frequency_days"]) if pd.notna(r["frequency_days"]) else None
+            nxt   = (last + timedelta(days=freq)) if last and freq else None
+            days  = (today - last).days if last else None
+            ov    = bool(nxt and nxt < today)
+            dt    = bool(nxt and nxt == today)
             rows_out.append({
                 "Ubicación":          r["location"],
                 "Zona":               r["zone"] or "",
@@ -383,21 +454,15 @@ with tab_rhythm:
         m2.metric("Conteo hoy 🟣", int((rdf["_st"] == "today").sum()))
         m3.metric("Vencidos 🔴",   int((rdf["_st"] == "overdue").sum()))
 
-        show = [
-            "Ubicación", "Zona", "Frecuencia (días)",
-            "Inicio", "Entrega", "Días transcurridos", "Siguiente conteo",
-        ]
+        show = ["Ubicación", "Zona", "Frecuencia (días)", "Inicio", "Entrega",
+                "Días transcurridos", "Siguiente conteo"]
 
-        def _style_row(row):
+        def _sr(row):
             n = len(row)
-            if row["_st"] == "overdue": return ["background:#ffe5e5; color:#7f0000"] * n
-            if row["_st"] == "today":   return ["background:#ede7f6; color:#311b92"] * n
+            if row["_st"] == "overdue": return ["background:#ffe5e5;color:#7f0000"] * n
+            if row["_st"] == "today":   return ["background:#ede7f6;color:#311b92"] * n
             return [""] * n
 
-        styled = (
-            rdf[show + ["_st"]]
-            .style.apply(_style_row, axis=1)
-            .hide(subset=["_st"], axis=1)
-        )
+        styled = (rdf[show + ["_st"]].style.apply(_sr, axis=1).hide(subset=["_st"], axis=1))
         st.dataframe(styled, use_container_width=True, hide_index=True)
         st.caption("🟣 Conteo programado para hoy  |  🔴 Vencido")
