@@ -72,6 +72,21 @@ def delete_location(loc_id: int):
     conn.close()
 
 
+def update_location(loc_id: int, name: str, zone: str):
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE locations SET name=?, zone=? WHERE id=?",
+            (name.upper().strip(), zone.strip(), loc_id),
+        )
+        conn.commit()
+        return True, ""
+    except sqlite3.IntegrityError:
+        return False, f"Ya existe una ubicación con el nombre «{name.upper().strip()}»."
+    finally:
+        conn.close()
+
+
 def get_locations() -> pd.DataFrame:
     conn = _conn()
     df = pd.read_sql(
