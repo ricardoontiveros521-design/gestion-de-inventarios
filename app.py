@@ -208,7 +208,8 @@ with tab_layout:
     locations = db.get_locations()
 
     # Auto-populate prompt
-    if locations.empty:
+    no_slots = locations.empty or not locations["slot_key"].astype(str).str.strip().any()
+    if no_slots:
         st.info("El mapa está vacío. Carga las zonas del almacén para comenzar.")
         if st.button("🏭 Cargar zonas del almacén", type="primary"):
             added = db.batch_add_warehouse_zones()
@@ -217,7 +218,13 @@ with tab_layout:
         st.stop()
 
     diff_locs, delivery_locs, start_locs, today_count = db.get_location_status()
-    slot_map = db.get_slot_map()
+
+    # Build slot_map inline: {slot_key: {id, name, zone}}
+    slot_map = {
+        row["slot_key"]: {"id": int(row["id"]), "name": row["name"], "zone": row["zone"] or ""}
+        for _, row in locations.iterrows()
+        if row.get("slot_key") and str(row["slot_key"]).strip()
+    }
 
     # ── Legend ────────────────────────────────────────────────────────
     leg1, leg2, leg3, leg4, leg5 = st.columns(5)
