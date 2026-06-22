@@ -6,147 +6,76 @@ import database as db
 st.set_page_config(page_title="Gestor de Inventarios", layout="wide", page_icon="📦")
 db.init_db()
 
-if "sel_slot" not in st.session_state:
-    st.session_state.sel_slot = None
+# ── Session state defaults ─────────────────────────────────────────────
+DEFAULTS = {
+    "tool_name": "",
+    "tool_type": "rack",
+    "tool_mode": "paint",   # paint | erase
+    "grid_rows": 10,
+    "grid_cols": 15,
+    "grid":      None,      # loaded lazily
+}
+for k, v in DEFAULTS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-# ══════════════════════════════════════════════════════════════════════
-# SVG HELPERS
-# ══════════════════════════════════════════════════════════════════════
+def load_grid():
+    st.session_state.grid = db.get_grid()
 
-def _zone_style(slot_key, slot_map, diff_locs, delivery_locs, start_locs, today_count, selected):
-    if slot_key not in slot_map:
-        return "#e9ecef", "#9aabbc", "#adb5bd", "1"
-    lid = slot_map[slot_key]["id"]
-    sel = slot_key == selected
-    stroke, sw = ("#ff6b35", "3.5") if sel else ("#6c757d", "1.5")
-    if lid in diff_locs:       return "#dc3545", "#fff",    stroke, sw
-    if lid in today_count:     return "#6f42c1", "#fff",    stroke, sw
-    if lid in delivery_locs:   return "#198754", "#fff",    stroke, sw
-    if lid in start_locs:      return "#ffc107", "#1a1a1a", stroke, sw
-    return "#cfe2ff", "#003a70", stroke, sw
+if st.session_state.grid is None:
+    load_grid()
 
+# ── CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* ── Grid cell buttons ─────────────────────────────────── */
+div[data-testid="stButton"] > button {
+    height: 52px !important;
+    width: 100% !important;
+    font-size: 9px !important;
+    font-weight: 700 !important;
+    padding: 2px 1px !important;
+    white-space: normal !important;
+    word-break: break-all !important;
+    line-height: 1.15 !important;
+    border-radius: 3px !important;
+    transition: filter .1s, transform .05s;
+}
+div[data-testid="stButton"] > button:hover { filter: brightness(.88); transform: scale(.97); }
 
-def _rect(slot_key, fallback_label, x, y, w, h,
-          slot_map, diff_locs, delivery_locs, start_locs, today_count, selected,
-          vertical=False, font_size=11):
-    bg, fg, stroke, sw = _zone_style(
-        slot_key, slot_map, diff_locs, delivery_locs, start_locs, today_count, selected
-    )
-    label = slot_map[slot_key]["name"] if slot_key in slot_map else fallback_label
-    cx, cy = x + w / 2, y + h / 2
-    r = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="4" '
-         f'fill="{bg}" stroke="{stroke}" stroke-width="{sw}"/>')
-    if vertical:
-        t = (f'<text transform="rotate(-90 {cx} {cy})" x="{cx}" y="{cy+4}" '
-             f'text-anchor="middle" fill="{fg}" font-size="{font_size}" '
-             f'font-weight="700" font-family="Arial,sans-serif">{label}</text>')
-    else:
-        lines = label.split("\n")
-        n = len(lines)
-        ty = cy - (n - 1) * 7
-        spans = "".join(
-            f'<tspan x="{cx}" dy="{"0" if i==0 else "14"}">{ln}</tspan>'
-            for i, ln in enumerate(lines)
-        )
-        t = (f'<text x="{cx}" y="{ty}" text-anchor="middle" fill="{fg}" '
-             f'font-size="{font_size}" font-weight="700" '
-             f'font-family="Arial,sans-serif" dominant-baseline="central">{spans}</text>')
-    return r + t
+/* ── Status (highest priority) ─────────────────────────── */
+[data-testid="stVerticalBlock"]:has(.sc-diff) [data-testid="stButton"] > button
+    { background:#dc3545 !important; color:#fff !important; border:2px solid #b02a37 !important; }
+[data-testid="stVerticalBlock"]:has(.sc-today) [data-testid="stButton"] > button
+    { background:#6f42c1 !important; color:#fff !important; border:2px solid #59359a !important; }
+[data-testid="stVerticalBlock"]:has(.sc-delivered) [data-testid="stButton"] > button
+    { background:#198754 !important; color:#fff !important; border:2px solid #146c43 !important; }
+[data-testid="stVerticalBlock"]:has(.sc-started) [data-testid="stButton"] > button
+    { background:#ffc107 !important; color:#212529 !important; border:2px solid #e5ac00 !important; }
 
+/* ── Block types (only when no status class present) ─────── */
+[data-testid="stVerticalBlock"]:has(.ct-rack) [data-testid="stButton"] > button
+    { background:#cfe2ff !important; color:#003a70 !important; border:1px solid #9ec5fe !important; }
+[data-testid="stVerticalBlock"]:has(.ct-zone) [data-testid="stButton"] > button
+    { background:#d1e7dd !important; color:#0a3622 !important; border:1px solid #a3cfbb !important; }
+[data-testid="stVerticalBlock"]:has(.ct-office) [data-testid="stButton"] > button
+    { background:#fff3cd !important; color:#664d03 !important; border:1px solid #ffe69c !important; }
+[data-testid="stVerticalBlock"]:has(.ct-dock) [data-testid="stButton"] > button
+    { background:#f8d7da !important; color:#58151c !important; border:1px solid #f1aeb5 !important; }
+[data-testid="stVerticalBlock"]:has(.ct-aisle) [data-testid="stButton"] > button
+    { background:repeating-linear-gradient(45deg,#e9ecef,#e9ecef 4px,#f8f9fa 4px,#f8f9fa 8px) !important;
+      color:#868e96 !important; border:1px solid #ced4da !important; }
+[data-testid="stVerticalBlock"]:has(.ct-empty) [data-testid="stButton"] > button
+    { background:transparent !important; color:#dee2e6 !important;
+      border:1px dashed #dee2e6 !important; font-size:16px !important; }
 
-def _pasillo(label, x, y, w, h, vertical=False):
-    cx, cy = x + w / 2, y + h / 2
-    r = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="0" '
-         f'fill="url(#hatch)" stroke="#bfc8d0" stroke-width="1"/>')
-    if vertical:
-        t = (f'<text transform="rotate(-90 {cx} {cy})" x="{cx}" y="{cy+4}" '
-             f'text-anchor="middle" fill="#6c757d" font-size="8" '
-             f'font-family="Arial,sans-serif">{label}</text>')
-    else:
-        t = (f'<text x="{cx}" y="{cy+4}" text-anchor="middle" fill="#6c757d" '
-             f'font-size="9" font-weight="700" font-family="Arial,sans-serif">{label}</text>')
-    return r + t
-
-
-def _lbl(text, x, y, size=11, fill="#1a2e42", anchor="middle", weight="700"):
-    return (f'<text x="{x}" y="{y}" text-anchor="{anchor}" fill="{fill}" '
-            f'font-size="{size}" font-weight="{weight}" '
-            f'font-family="Arial,sans-serif">{text}</text>')
-
-
-def make_warehouse_svg(slot_map, diff_locs, delivery_locs, start_locs, today_count, selected=None):
-    kw = dict(slot_map=slot_map, diff_locs=diff_locs, delivery_locs=delivery_locs,
-              start_locs=start_locs, today_count=today_count, selected=selected)
-
-    # ── Fixed structural skeleton ──────────────────────────────────────
-    p = [
-        '<svg viewBox="0 0 1200 760" xmlns="http://www.w3.org/2000/svg" '
-        'style="width:100%;display:block;border-radius:8px;'
-        'border:2px solid #2c3e50;background:#dde8f0;">',
-
-        '<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="8" height="8" '
-        'patternTransform="rotate(45 0 0)"><line x1="0" y1="0" x2="0" y2="8" '
-        'stroke="#b0bec5" stroke-width="2.5"/></pattern></defs>',
-
-        # outer building
-        '<rect x="4" y="4" width="1192" height="752" rx="6" fill="#f7f9fb" '
-        'stroke="#2c3e50" stroke-width="3"/>',
-
-        # top banner
-        '<rect x="235" y="4" width="775" height="24" fill="#1a2e42"/>',
-        _lbl("ZONA DE RECEPCIÓN — MUELLES DE CARGA", 622, 20, size=13, fill="#ffffff"),
-
-        # reception background
-        '<rect x="235" y="28" width="775" height="168" rx="3" fill="#fef9ee" '
-        'stroke="#c8a020" stroke-width="1.5" stroke-dasharray="8,4"/>',
-
-        # left andén background
-        '<rect x="4" y="195" width="230" height="453" rx="3" fill="#eef2f6" '
-        'stroke="#adb5bd" stroke-width="1" stroke-dasharray="6,3"/>',
-        _lbl("ANDÉN DE RECEPCIÓN", 119, 188, size=10, fill="#495057"),
-
-        # main interior frame
-        '<rect x="235" y="196" width="775" height="457" rx="3" fill="none" '
-        'stroke="#2c3e50" stroke-width="2.5"/>',
-
-        # top pasillo de tráfico
-        _pasillo("PASILLO DE TRÁFICO", 235, 196, 775, 36),
-
-        # storage label
-        _lbl("ALMACENAMIENTO PRINCIPAL  —  Estanterías 100–800", 622, 250),
-
-        # middle pasillo de tráfico
-        _pasillo("PASILLO DE TRÁFICO", 235, 440, 775, 35),
-
-        # picking label
-        _lbl("ÁREA DE PICKING / PREPARACIÓN", 622, 492),
-
-        # bottom pasillo de tráfico
-        _pasillo("PASILLO DE TRÁFICO", 235, 617, 775, 35),
-
-        # bottom banner
-        '<rect x="235" y="743" width="775" height="13" fill="#1a2e42"/>',
-        _lbl("ZONA DE EXPEDICIÓN", 622, 753, fill="#ffffff"),
-
-        # right admin background
-        '<rect x="1012" y="4" width="184" height="752" rx="3" fill="#f0f4f0" '
-        'stroke="#adb5bd" stroke-width="1" stroke-dasharray="4,3"/>',
-    ]
-
-    # ── Dynamic zones from database ────────────────────────────────────
-    sorted_zones = sorted(slot_map.items(), key=lambda x: x[1].get("sort", 0))
-    for slot_key, data in sorted_zones:
-        p.append(_rect(
-            slot_key, data["name"],
-            data["svg_x"], data["svg_y"],
-            data["svg_w"], data["svg_h"],
-            vertical=data["svg_vertical"],
-            **kw,
-        ))
-
-    p.append("</svg>")
-    return "".join(p)
-
+/* Row header cells */
+[data-testid="stVerticalBlock"]:has(.row-hdr) [data-testid="stMarkdownContainer"] p {
+    line-height:52px !important; font-weight:700; color:#6c757d;
+    text-align:center; font-size:11px; margin:0;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════
 # APP
@@ -158,146 +87,202 @@ tab_layout, tab_diff, tab_rhythm = st.tabs(
 )
 
 # ─────────────────────────────────────────────────────────────────────
-# TAB 1 · LAYOUT
+# TAB 1 · LEGO LAYOUT BUILDER
 # ─────────────────────────────────────────────────────────────────────
 with tab_layout:
 
-    locations = db.get_locations()
+    ROWS = st.session_state.grid_rows
+    COLS = st.session_state.grid_cols
+    grid = st.session_state.grid
 
-    # Auto-populate if no slots exist
-    no_slots = (
-        locations.empty
-        or not locations["slot_key"].astype(str).str.strip().any()
-    )
-    if no_slots:
-        st.info("El mapa está vacío. Carga las zonas del almacén para comenzar.")
-        if st.button("🏭 Cargar zonas del almacén", type="primary"):
-            added = db.batch_add_warehouse_zones()
-            st.success(f"Se cargaron {added} zonas.")
-            st.rerun()
-        st.stop()
-
+    # ── Status data ──────────────────────────────────────────────────
     diff_locs, delivery_locs, start_locs, today_count = db.get_location_status()
+    locations    = db.get_locations()
+    loc_by_name  = {row["name"]: row for _, row in locations.iterrows()}
 
-    # Build slot_map with SVG position data
-    slot_map = {
-        row["slot_key"]: {
-            "id":           int(row["id"]),
-            "name":         row["name"],
-            "zone":         row["zone"] or "",
-            "svg_x":        int(row.get("svg_x") or 0),
-            "svg_y":        int(row.get("svg_y") or 0),
-            "svg_w":        int(row.get("svg_w") or 100),
-            "svg_h":        int(row.get("svg_h") or 60),
-            "svg_vertical": bool(row.get("svg_vertical") or 0),
-            "sort":         int(row.get("row_pos") or 0),
-        }
-        for _, row in locations.iterrows()
-        if row.get("slot_key") and str(row["slot_key"]).strip()
+    def cell_css(cell):
+        """Return the CSS class that determines the cell's color."""
+        if cell is None:
+            return "ct-empty"
+        ctype = cell["type"]
+        name  = cell["name"]
+        loc   = loc_by_name.get(name)
+        if loc is not None:
+            lid = int(loc["id"])
+            if lid in diff_locs:     return "sc-diff"
+            if lid in today_count:   return "sc-today"
+            if lid in delivery_locs: return "sc-delivered"
+            if lid in start_locs:    return "sc-started"
+        return f"ct-{ctype}"
+
+    # ── TOOL BAR ─────────────────────────────────────────────────────
+    st.markdown("### 🧱 Herramienta")
+
+    TYPE_LABELS = {
+        "rack":   "🟦 Rack / Estantería",
+        "aisle":  "⬜ Pasillo",
+        "zone":   "🟩 Zona / Área",
+        "office": "🟨 Oficina / Admin",
+        "dock":   "🟥 Andén / Muelle",
     }
 
-    # ── Legend ────────────────────────────────────────────────────────
-    l1, l2, l3, l4, l5 = st.columns(5)
-    l1.markdown("⬜ Sin actividad")
-    l2.markdown("🟡 Iniciado")
-    l3.markdown("🟢 Entregado")
-    l4.markdown("🔴 Diferencias")
-    l5.markdown("🟣 Conteo hoy")
+    tb1, tb2, tb3, tb4, tb5 = st.columns([3, 2, 1, 1, 1])
 
-    # ── SVG MAP ───────────────────────────────────────────────────────
-    st.markdown(
-        make_warehouse_svg(
-            slot_map, diff_locs, delivery_locs, start_locs, today_count,
-            selected=st.session_state.sel_slot,
-        ),
-        unsafe_allow_html=True,
+    tool_name = tb1.text_input(
+        "Nombre del bloque",
+        value=st.session_state.tool_name,
+        placeholder="ej: RACK-A1, PASILLO-1, RECEPCIÓN…",
+        key="inp_tool_name",
+        label_visibility="collapsed",
     )
+    st.session_state.tool_name = tool_name
+
+    tool_type = tb2.selectbox(
+        "Tipo",
+        list(TYPE_LABELS.keys()),
+        format_func=lambda k: TYPE_LABELS[k],
+        index=list(TYPE_LABELS.keys()).index(st.session_state.tool_type),
+        key="sel_tool_type",
+        label_visibility="collapsed",
+    )
+    st.session_state.tool_type = tool_type
+
+    if tb3.button("🖊️ Pintar", use_container_width=True,
+                  type="primary" if st.session_state.tool_mode == "paint" else "secondary"):
+        st.session_state.tool_mode = "paint"
+        st.rerun()
+
+    if tb4.button("🗑️ Borrar", use_container_width=True,
+                  type="primary" if st.session_state.tool_mode == "erase" else "secondary"):
+        st.session_state.tool_mode = "erase"
+        st.rerun()
+
+    # Preview badge
+    mode = st.session_state.tool_mode
+    if mode == "erase":
+        tb5.markdown("**Modo:** 🗑️ Borrar")
+    elif tool_name.strip():
+        _, fg = db.CELL_TYPES.get(tool_type, ("#eee", "#333"))[1:]
+        bg, fg = db.CELL_TYPES[tool_type][1], db.CELL_TYPES[tool_type][2]
+        tb5.markdown(
+            f'<span style="background:{bg};color:{fg};padding:4px 8px;'
+            f'border-radius:4px;font-weight:700;font-size:12px">'
+            f'{tool_name.strip()}</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        tb5.markdown('<span style="color:#aaa;font-size:12px">↑ escribe un nombre</span>',
+                     unsafe_allow_html=True)
+
+    # ── Grid config ──────────────────────────────────────────────────
+    with st.expander("⚙️ Tamaño de la cuadrícula"):
+        gc1, gc2, gc3 = st.columns([1, 1, 2])
+        new_rows = gc1.number_input("Filas",    1, 25, ROWS, key="cfg_rows")
+        new_cols = gc2.number_input("Columnas", 1, 30, COLS, key="cfg_cols")
+        if gc3.button("Aplicar tamaño", use_container_width=True):
+            st.session_state.grid_rows = int(new_rows)
+            st.session_state.grid_cols = int(new_cols)
+            st.rerun()
+        gc3.markdown(" ")
+        if gc3.button("🧹 Borrar todo el mapa", type="secondary", use_container_width=True):
+            db.clear_grid()
+            load_grid()
+            st.rerun()
 
     st.divider()
 
-    # ── EDITOR: Mover y redimensionar zonas ───────────────────────────
-    with st.expander("🖊️ Editar posición y tamaño de una zona"):
-        zones_df = locations[locations["slot_key"].astype(str).str.strip() != ""]
-        if not zones_df.empty:
-            zone_options = zones_df["name"].tolist()
-            edit_name = st.selectbox(
-                "Zona a editar", zone_options, key="edit_pos_sel"
-            )
-            ez = zones_df[zones_df["name"] == edit_name].iloc[0]
+    # ── LEGEND ───────────────────────────────────────────────────────
+    lcols = st.columns(9)
+    legends = [
+        ("🟦", "Rack"),
+        ("⬜", "Pasillo"),
+        ("🟩", "Zona"),
+        ("🟨", "Oficina"),
+        ("🟥", "Andén"),
+        ("🔴", "Diferencias"),
+        ("🟢", "Entregado"),
+        ("🟡", "Iniciado"),
+        ("🟣", "Conteo hoy"),
+    ]
+    for lc, (ico, txt) in zip(lcols, legends):
+        lc.markdown(f"{ico} {txt}")
 
-            st.caption(
-                "💡 El canvas del mapa mide **1200 × 760**. "
-                "Arrastra los sliders para reubicar la zona hasta que encaje con tu almacén real."
-            )
+    st.markdown("**👆 Haz clic en una celda para pintar o borrar**")
 
-            with st.form("form_edit_svg"):
-                c1, c2 = st.columns(2)
-                new_x = c1.slider("Posición X  (izquierda ↔ derecha)",  0, 1150,
-                                   int(ez.get("svg_x") or 0), step=5)
-                new_y = c2.slider("Posición Y  (arriba ↕ abajo)",        0, 720,
-                                   int(ez.get("svg_y") or 0), step=5)
-                new_w = c1.slider("Ancho (W)",  20, 800,
-                                   int(ez.get("svg_w") or 100), step=5)
-                new_h = c2.slider("Alto (H)",   20, 500,
-                                   int(ez.get("svg_h") or 60), step=5)
-                new_v = st.checkbox(
-                    "Texto vertical (ideal para racks angostos)",
-                    value=bool(ez.get("svg_vertical") or 0),
+    # ── GRID CANVAS ──────────────────────────────────────────────────
+
+    # Column headers
+    hdr = st.columns([0.4] + [1] * COLS)
+    hdr[0].markdown(" ")
+    for c in range(COLS):
+        hdr[c + 1].markdown(
+            f"<p style='text-align:center;font-size:10px;font-weight:700;"
+            f"color:#6c757d;margin:0'>{c + 1}</p>",
+            unsafe_allow_html=True,
+        )
+
+    # Grid rows
+    for r in range(ROWS):
+        row_cols = st.columns([0.4] + [1] * COLS)
+
+        # Row number
+        row_cols[0].markdown(
+            f'<span class="row-hdr"></span>{r + 1}',
+            unsafe_allow_html=True,
+        )
+
+        for c in range(COLS):
+            with row_cols[c + 1]:
+                cell  = grid.get((r, c))
+                css   = cell_css(cell)
+
+                # Hidden CSS marker
+                st.markdown(
+                    f'<span class="{css}" style="display:none"></span>',
+                    unsafe_allow_html=True,
                 )
 
-                s1, s2 = st.columns(2)
-                if s1.form_submit_button("💾 Guardar posición", use_container_width=True):
-                    db.update_location_svg(
-                        int(ez["id"]), new_x, new_y, new_w, new_h, int(new_v)
-                    )
-                    st.success("✅ Posición guardada.")
-                    st.rerun()
-                if s2.form_submit_button("↩️ Restablecer original", use_container_width=True):
-                    db.reset_location_svg(str(ez.get("slot_key", "")))
-                    st.success("Posición restablecida al valor genérico.")
-                    st.rerun()
+                label = cell["name"] if cell else "+"
 
-    # ── EDITOR: Renombrar / cambiar grupo ─────────────────────────────
-    with st.expander("✏️ Renombrar zona o cambiar grupo"):
-        all_names = locations["name"].tolist()
-        sel_name  = st.selectbox(
-            "Zona a editar", ["— Selecciona —"] + all_names, key="loc_selector"
-        )
-        if sel_name != "— Selecciona —":
-            sel_row = locations[locations["name"] == sel_name].iloc[0]
-            lid = int(sel_row["id"])
-            p1, p2 = st.columns(2)
-            with p1:
-                with st.form("form_edit_loc"):
-                    new_name = st.text_input("Nombre / Código", value=sel_row["name"])
-                    new_zone = st.text_input("Grupo / Zona",    value=sel_row["zone"] or "")
-                    if st.form_submit_button("💾 Guardar", use_container_width=True):
-                        ok, msg = db.update_location(lid, new_name, new_zone)
-                        if ok:
-                            st.rerun()
-                        else:
-                            st.error(msg)
-            with p2:
-                st.markdown(" ")
-                st.markdown(" ")
-                if st.button("🗑️ Eliminar ubicación", type="secondary", use_container_width=True):
-                    db.delete_location(lid)
-                    st.rerun()
-
-    # ── Agregar ubicación extra ────────────────────────────────────────
-    with st.expander("➕ Agregar zona extra (no incluida en el mapa base)"):
-        with st.form("form_add_extra", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            extra_name = c1.text_input("Nombre *", placeholder="RACK-XL")
-            extra_zone = c2.text_input("Zona / Grupo", placeholder="Almacenamiento")
-            if st.form_submit_button("Agregar"):
-                if extra_name.strip():
-                    ok, msg = db.add_location(extra_name, extra_zone, 99, 0)
-                    if ok:
-                        st.success(f"✅ {extra_name.upper()} agregado.")
+                if st.button(label, key=f"g_{r}_{c}", use_container_width=True):
+                    if mode == "erase":
+                        db.erase_cell(r, c)
+                        load_grid()
                         st.rerun()
                     else:
-                        st.error(msg)
+                        name = st.session_state.tool_name.strip()
+                        if not name:
+                            st.toast("⚠️ Escribe un nombre antes de pintar", icon="⚠️")
+                        else:
+                            db.paint_cell(r, c, name, st.session_state.tool_type)
+                            load_grid()
+                            st.rerun()
+
+    # ── LOCATION SUMMARY ─────────────────────────────────────────────
+    st.divider()
+    grid_names = db.get_grid_locations()
+    if grid_names:
+        st.markdown(f"#### 📋 Ubicaciones en el mapa ({len(grid_names)})")
+        chunk_size = 6
+        for i in range(0, len(grid_names), chunk_size):
+            chunk = grid_names[i: i + chunk_size]
+            cols  = st.columns(chunk_size)
+            for col, name in zip(cols, chunk):
+                loc  = loc_by_name.get(name)
+                lid  = int(loc["id"]) if loc is not None else None
+                if lid in diff_locs:       bg, fg = "#dc3545", "#fff"
+                elif lid in today_count:   bg, fg = "#6f42c1", "#fff"
+                elif lid in delivery_locs: bg, fg = "#198754", "#fff"
+                elif lid in start_locs:    bg, fg = "#ffc107", "#212529"
+                else:                      bg, fg = "#cfe2ff", "#003a70"
+                col.markdown(
+                    f'<div style="background:{bg};color:{fg};padding:6px 8px;'
+                    f'border-radius:6px;font-weight:700;font-size:12px;'
+                    f'text-align:center;margin-bottom:4px">{name}</div>',
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.info("El mapa está vacío — pinta tu almacén usando la herramienta de arriba.")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -308,7 +293,7 @@ with tab_diff:
     locations = db.get_locations()
 
     if locations.empty:
-        st.warning("Primero carga las zonas en la pestaña **Layout**.")
+        st.warning("Primero pinta ubicaciones en la pestaña **Layout**.")
     else:
         with st.expander("➕ Registrar diferencia"):
             with st.form("form_add_diff", clear_on_submit=True):
@@ -344,19 +329,19 @@ with tab_diff:
             tipo_filter = f2.radio("Tipo", ["Todos", "Faltantes", "Sobrantes"], horizontal=True)
 
             filt = df.copy()
-            if locs_filter: filt = filt[filt["location"].isin(locs_filter)]
+            if locs_filter:      filt = filt[filt["location"].isin(locs_filter)]
             if tipo_filter == "Faltantes": filt = filt[filt["difference"] < 0]
             elif tipo_filter == "Sobrantes": filt = filt[filt["difference"] > 0]
 
-            display = filt[["id","article","location","zone","difference","price","impact","created_date"]].copy()
-            display.columns = ["ID","Artículo","Ubicación","Zona","Diferencia","Precio ($)","Impacto ($)","Fecha"]
-            display["Fecha"] = pd.to_datetime(display["Fecha"]).dt.strftime("%d/%m/%Y")
+            disp = filt[["id","article","location","zone","difference","price","impact","created_date"]].copy()
+            disp.columns = ["ID","Artículo","Ubicación","Zona","Diferencia","Precio ($)","Impacto ($)","Fecha"]
+            disp["Fecha"] = pd.to_datetime(disp["Fecha"]).dt.strftime("%d/%m/%Y")
 
             def _cn(v):
                 if not isinstance(v, (int, float)): return ""
                 return "color:#dc3545;font-weight:700" if v < 0 else ("color:#198754;font-weight:700" if v > 0 else "")
 
-            st.dataframe(display.style.map(_cn, subset=["Diferencia","Impacto ($)"]),
+            st.dataframe(disp.style.map(_cn, subset=["Diferencia","Impacto ($)"]),
                          use_container_width=True, hide_index=True)
 
             with st.expander("🗑️ Eliminar registro"):
@@ -375,7 +360,7 @@ with tab_rhythm:
     locations = db.get_locations()
 
     if locations.empty:
-        st.warning("Primero carga las zonas en la pestaña **Layout**.")
+        st.warning("Primero pinta ubicaciones en la pestaña **Layout**.")
     else:
         rhythm = db.get_rhythm()
         today  = date.today()
@@ -392,11 +377,11 @@ with tab_rhythm:
                 row = rhythm[rhythm["location"] == sel].iloc[0]
                 with st.form("form_rhythm"):
                     c1, c2, c3 = st.columns(3)
-                    fv       = int(row["frequency_days"]) if pd.notna(row["frequency_days"]) else 30
-                    freq_in  = c1.number_input("Frecuencia (días)", 1, 365, fv)
-                    has_s    = c2.checkbox("¿Tiene fecha de inicio?",   value=bool(_pd(row["start_date"])))
-                    has_d    = c3.checkbox("¿Tiene fecha de entrega?",  value=bool(_pd(row["delivery_date"])))
-                    si = di  = None
+                    fv      = int(row["frequency_days"]) if pd.notna(row["frequency_days"]) else 30
+                    freq_in = c1.number_input("Frecuencia (días)", 1, 365, fv)
+                    has_s   = c2.checkbox("¿Tiene fecha de inicio?",   value=bool(_pd(row["start_date"])))
+                    has_d   = c3.checkbox("¿Tiene fecha de entrega?",  value=bool(_pd(row["delivery_date"])))
+                    si = di = None
                     if has_s: si = c2.date_input("Inicio",  value=_pd(row["start_date"])    or today, key="si")
                     if has_d: di = c3.date_input("Entrega", value=_pd(row["delivery_date"]) or today, key="di")
                     if st.form_submit_button("Guardar", use_container_width=True):
